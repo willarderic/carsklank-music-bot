@@ -12,9 +12,6 @@ const prefix = '!'
 bot.on('ready', async () => {
   console.log(`Logged in as ${bot.user.tag}!`)
   isReady = true
-  commandLists = await getAudioCommands('./audio').catch(console.error)
-  commandMap = commandLists[0]
-  commonAudioCommands = commandLists[1]
 });
 
 bot.on('message', async (msg) => {
