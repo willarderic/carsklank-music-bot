@@ -1,5 +1,4 @@
 const Discord = require('discord.js')
-const bot = new Discord.Client()
 const dotenv = require('dotenv')
 const ytdl = require('ytdl-core')
 
@@ -9,41 +8,149 @@ dotenv.config()
 // prefix for commands
 const prefix = '!'
 
-bot.on('ready', async () => {
-  console.log(`Logged in as ${bot.user.tag}!`)
-  isReady = true
-});
+const client = new Discord.Client()
 
-bot.on('message', async (msg) => {
-  // Check if the message is a command
-  if (msg.content && msg.content[0] === prefix) {
-    messageParts = msg.content.slice(1).split(' ')
+const queue = new Map()
 
-    if (isReady) {
-      isReady = false
-      // get the correct voice channel
-      const voiceChannel = msg.member.voice.channel
+client.once("ready", () => {
+  console.log("Ready!")
+})
 
-      if (voiceChannel) {
-        let dispatcher
-        if (messageParts[0] === 'play') {
-          if (messageParts[0] && ytdl.validateURL(messageParts[1])) {
-            const connection = await voiceChannel.join()
-            dispater = connection.play(ytdl(messageParts[1], { filter: 'audioonly' }), { seek: 0, volume: 1 })
-          } else {
-            msg.channel.send('Not a valid youtube url')
-          }
-        } else {
-          console.log('Did not recognize command ' + messageParts)
-        }
-      } else {
-        const textChannel = msg.channel
-        await textChannel.send('You are not in a voice channel')
-      }
+client.once("reconnecting", () => {
+  console.log("Reconnecting!")
+})
 
-      isReady = true
-    }
+client.once("disconnect", () => {
+  console.log("Disconnect!")
+})
+
+client.on("message", async message => {
+  if (message.author.bot) return
+  if (!message.content.startsWith(prefix)) return
+
+  const serverQueue = queue.get(message.guild.id)
+
+  if (message.content.startsWith(`${prefix}play`)) {
+    execute(message, serverQueue);
+    return
+  } else if (message.content.startsWith(`${prefix}skip`)) {
+    skip(message, serverQueue);
+    return
+  } else if (message.content.startsWith(`${prefix}stop`)) {
+    stop(message, serverQueue);
+    return
+  } else if (message.content.startsWith(`${prefix}pause`)) {
+    pause(message, serverQueue);
+    return
+  } else if (message.content.startsWith(`${prefix}resume`)) {
+    resume(message, serverQueue);
+    return
+  } else {
+    message.channel.send("You need to enter a valid command!")
   }
 })
 
-bot.login(process.env.API_KEY)
+async function execute(message, serverQueue) {
+  const args = message.content.split(" ")
+
+  const voiceChannel = message.member.voice.channel
+  if (!voiceChannel)
+    return message.channel.send(
+      "You need to be in a voice channel to play music!"
+    )
+  const permissions = voiceChannel.permissionsFor(message.client.user)
+  if (!permissions.has("CONNECT") || !permissions.has("SPEAK")) {
+    return message.channel.send(
+      "I need the permissions to join and speak in your voice channel!"
+    )
+  }
+
+  if (!args[1]) {
+    return message.channel.send('You must provide a URL!').catch(console.error)
+  }
+
+  const song = args[1]
+  console.log(song)
+
+  if (!serverQueue) {
+    const queueContruct = {
+      textChannel: message.channel,
+      voiceChannel: voiceChannel,
+      connection: null,
+      songs: [],
+      volume: 5,
+      playing: true
+    };
+
+    queue.set(message.guild.id, queueContruct)
+
+    queueContruct.songs.push(song)
+
+    try {
+      var connection = await voiceChannel.join()
+      queueContruct.connection = connection
+      play(message.guild, queueContruct.songs[0])
+    } catch (err) {
+      console.log(err)
+      queue.delete(message.guild.id)
+      return message.channel.send(err)
+    }
+  } else {
+    serverQueue.songs.push(song)
+  }
+}
+
+function skip(message, serverQueue) {
+  if (!message.member.voice.channel)
+    return message.channel.send(
+      "You have to be in a voice channel to stop the music!"
+    );
+  if (!serverQueue)
+    return message.channel.send("There is no song that I could skip!");
+  serverQueue.connection.dispatcher.end()
+}
+
+function stop(message, serverQueue) {
+  if (!message.member.voice.channel)
+    return message.channel.send(
+      "You have to be in a voice channel to stop the music!"
+    );
+  serverQueue.songs = []
+  serverQueue.connection.dispatcher.end()
+}
+
+function pause(message, serverQueue) {
+  if (!message.member.voice.channel)
+    return message.channel.send(
+      "You have to be in a voice channel to pause the music!"
+    )
+  serverQueue.connection.dispatcher.pause();
+}
+
+function resume(message, serverQueue) {
+  if (!message.member.voice.channel)
+    return message.channel.send(
+      "You have to be in a voice channel to resume the music!"
+    )
+  serverQueue.connection.dispatcher.resume()
+}
+
+function play(guild, song) {
+  const serverQueue = queue.get(guild.id)
+  if (!song) {
+    serverQueue.voiceChannel.leave()
+    queue.delete(guild.id)
+    return
+  }
+
+  const dispatcher = serverQueue.connection
+    .play(ytdl(song, { filter: 'audioonly' }))
+    .on("finish", () => {
+      serverQueue.songs.shift()
+      play(guild, serverQueue.songs[0])
+    })
+    .on("error", error => console.error(error))
+  dispatcher.setVolumeLogarithmic(serverQueue.volume / 5)
+}
+
+client.login(process.env.API_KEY)
